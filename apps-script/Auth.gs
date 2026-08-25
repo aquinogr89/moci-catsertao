@@ -581,6 +581,25 @@ function handleSalvarConteudoEventos_(body) {
 // planilha, e ignora silenciosamente qualquer chave que não seja mais uma
 // coluna válida (protege contra um payload desatualizado no front-end
 // escrever fora do cabeçalho).
+//
+// Duas travas contra escrever na linha/valor errado (achadas em auditoria de
+// 2026-08-25, motivadas pelo caso real do SHOPPING SERRA TALHADA -- ver
+// converterValorEdicaoTermo_ para o segundo caso):
+//
+// 1) `linha` é só a posição física na planilha, capturada quando a tabela
+//    carregou. Se alguém inserir/remover uma linha no MEIO da planilha
+//    enquanto o modal está aberto, `linha` aponta pro registro ERRADO --
+//    checar só `linha > getLastRow()` (linha além do fim) não pega esse
+//    caso. `body.fingerprint` é o valor da primeira coluna (ex.: PROTOCOLO)
+//    que o front-end já tinha ao abrir o modal; se não bater mais com o que
+//    está de fato naquela linha agora, a planilha mudou debaixo do usuário
+//    -- melhor recusar e pedir pra atualizar do que gravar no lugar errado.
+// 2) Datas eram aceitas em qualquer formato de texto livre; se não batesse
+//    com dd/MM/yyyy, o valor virava uma STRING crua por cima de uma célula
+//    de Data, sem erro nenhum -- e a fórmula de SITUAÇÃO (que compara
+//    TODAY() com essa célula) parava de funcionar SÓ naquela linha dali pra
+//    frente. Agora valida TODOS os campos antes de escrever qualquer um
+//    (evita gravação parcial também).
 function handleEditarTermo_(body) {
   var sessao = exigirSessao_(body.token, ['admin_master', 'admin']);
   if (sessao.erro) return { ok: false, error: sessao.erro };
@@ -600,6 +619,24 @@ function handleEditarTermo_(body) {
     }
     var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
     var colSituacao = encontrarColunaSituacaoTermo_(headers);
+
+    // (1) Confere se a linha ainda é o mesmo registro que o front-end tinha
+    // carregado, usando a primeira coluna (ex. PROTOCOLO) como impressão
+    // digital -- barato de checar e cobre o caso real de linhas inseridas/
+    // removidas no meio da planilha por outra pessoa nesse intervalo.
+    if (body.fingerprint != null && headers.length > 0) {
+      var valorAtualPrimeiraColuna = String(sheet.getRange(linha, 1).getValue());
+      if (valorAtualPrimeiraColuna !== String(body.fingerprint)) {
+        return { ok: false, error: 'Este registro mudou de posição na planilha desde que a tabela foi carregada. Clique em "Atualizar" e tente editar de novo.' };
+      }
+    }
+
+    // (2) Valida TODOS os campos antes de gravar qualquer um -- em vez de
+    // converter e escrever campo a campo, o que gravaria os primeiros e
+    // deixaria a planilha pela metade se um campo do meio falhasse.
+    var celulas = sheet.getRange(linha, 1, 1, headers.length).getValues()[0];
+    var escritas = [];
+    var camposComErro = [];
     Object.keys(dados).forEach(function (header) {
       var col = headers.indexOf(header);
       if (col === -1) return;
@@ -608,8 +645,23 @@ function handleEditarTermo_(body) {
       // (a edição, no front-end, já nem mostra esse campo). Para concluir o
       // termo manualmente, ver handleConcluirTermo_.
       if (col === colSituacao) return;
-      var celula = sheet.getRange(linha, col + 1);
-      celula.setValue(converterValorEdicaoTermo_(celula.getValue(), dados[header]));
+      var resultado = converterValorEdicaoTermo_(celulas[col], dados[header]);
+      if (resultado.erro) {
+        camposComErro.push(header);
+        return;
+      }
+      escritas.push({ col: col, valor: resultado.valor });
+    });
+
+    if (camposComErro.length > 0) {
+      return {
+        ok: false,
+        error: 'Data em formato inválido em: ' + camposComErro.join(', ') + '. Use dd/mm/aaaa (ex.: 25/08/2026).'
+      };
+    }
+
+    escritas.forEach(function (e) {
+      sheet.getRange(linha, e.col + 1).setValue(e.valor);
     });
   } finally {
     lock.releaseLock();
@@ -644,6 +696,14 @@ function handleConcluirTermo_(body) {
     if (colSituacao === -1) {
       return { ok: false, error: 'Não foi encontrada a coluna de Situação na planilha do Termo.' };
     }
+    // Mesma trava de handleEditarTermo_: confirma que a linha ainda é o
+    // mesmo registro antes de marcar como concluído.
+    if (body.fingerprint != null) {
+      var valorAtualPrimeiraColuna = String(sheet.getRange(linha, 1).getValue());
+      if (valorAtualPrimeiraColuna !== String(body.fingerprint)) {
+        return { ok: false, error: 'Este registro mudou de posição na planilha desde que a tabela foi carregada. Clique em "Atualizar" e tente de novo.' };
+      }
+    }
     sheet.getRange(linha, colSituacao + 1).setValue('CONCLUÍDO');
   } finally {
     lock.releaseLock();
@@ -664,16 +724,26 @@ function encontrarColunaSituacaoTermo_(headers) {
 // veio do formulário de edição — sem isso, toda edição viraria texto puro e
 // a formatação de data (formatarCelula_) pararia de funcionar nessa célula
 // nas próximas consultas.
+//
+// Retorna { valor } em caso de sucesso ou { erro: true } se o texto não for
+// um formato de data aceitável para uma célula que era Data. Antes disso
+// caía num fallback silencioso (gravava o texto cru como string) -- foi
+// exatamente isso que quebrou a linha do SHOPPING SERRA TALHADA no Termo de
+// Compromisso (auditoria de 2026-08-25): a célula "EM VIGOR ATÉ" virou
+// texto, e a fórmula de SITUAÇÃO (que compara TODAY() com essa célula)
+// nunca mais acusou VENCIDO só naquela linha, mesmo com a data já vencida
+// há dias -- sem erro nenhum em lugar nenhum pra avisar.
 function converterValorEdicaoTermo_(valorAtual, novoTexto) {
   var texto = String(novoTexto == null ? '' : novoTexto).trim();
   if (Object.prototype.toString.call(valorAtual) === '[object Date]') {
     var data = parseDataBr_(texto);
-    return data || texto;
+    if (!data) return { erro: true };
+    return { valor: data };
   }
   if (typeof valorAtual === 'number' && texto !== '' && !isNaN(Number(texto.replace(',', '.')))) {
-    return Number(texto.replace(',', '.'));
+    return { valor: Number(texto.replace(',', '.')) };
   }
-  return texto;
+  return { valor: texto };
 }
 
 // Aceita "dd/MM/yyyy" ou "dd/MM/yyyy HH:mm" — mesmo formato que

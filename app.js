@@ -384,13 +384,50 @@ function deleteLocalPoint(id) {
   return Promise.resolve({ ok: true });
 }
 
+// ===================== Acesso à API =====================
+// O Apps Script responde com uma PÁGINA HTML -- não com JSON -- quando uma
+// exceção escapa do doPost, quando a autorização expira ou quando a execução é
+// interrompida. Fazer r.json() direto nessa página produz
+// "Unexpected token '<', "<!DOCTYPE "... is not valid JSON", que não diz nada
+// ao usuário e, pior, esconde o fato de que a operação pode ter sido concluída
+// no servidor antes de a resposta se perder. Foi exatamente isso na exclusão do
+// OCI CONDOMINIO BUONA VITA: a linha foi apagada, o front quebrou, a lista não
+// atualizou e a segunda tentativa acusou "não encontrado".
+function lerRespostaJson(r) {
+  return r.text().then(function (texto) {
+    var dados;
+    try {
+      dados = JSON.parse(texto);
+    } catch (e) {
+      if (!r.ok) {
+        throw new Error('O servidor respondeu ' + r.status + ' ' + (r.statusText || '') +
+          '. A operação pode ter sido concluída — atualize a lista antes de tentar de novo.');
+      }
+      throw new Error('O servidor não respondeu em JSON (veio uma página HTML). ' +
+        'A operação pode ter sido concluída — atualize a lista antes de tentar de novo.');
+    }
+    if (!r.ok) {
+      throw new Error(dados.error || ('Falha na requisição (' + r.status + ').'));
+    }
+    return dados;
+  });
+}
+
+function postApi(payload) {
+  return fetch(SHEETS_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  }).then(lerRespostaJson);
+}
+
 let markersById = {};
 
 function loadPoints() {
   markersById = {};
   if (SHEETS_API_URL) {
     fetch(SHEETS_API_URL)
-      .then(function (r) { return r.json(); })
+      .then(lerRespostaJson)
       .then(function (data) {
         (data.points || data || []).forEach(function (raw) {
           const p = normalizePoint(raw);
@@ -410,11 +447,7 @@ function loadPoints() {
 function savePoint(record, token) {
   if (SHEETS_API_URL) {
     const payload = Object.assign({ action: 'cadastrarRTI', token: token }, record);
-    return fetch(SHEETS_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); }).then(function (res) {
+    return postApi(payload).then(function (res) {
       if (!res.ok) return Promise.reject(new Error(res.error || 'Falha ao salvar.'));
       record.id = res.id;
       return record;
@@ -426,11 +459,7 @@ function savePoint(record, token) {
 function editPoint(id, record, token) {
   if (SHEETS_API_URL) {
     const payload = Object.assign({ action: 'editarRTI', token: token, id: id }, record);
-    return fetch(SHEETS_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); }).then(function (res) {
+    return postApi(payload).then(function (res) {
       if (!res.ok) return Promise.reject(new Error(res.error || 'Falha ao salvar.'));
       return res;
     });
@@ -440,11 +469,7 @@ function editPoint(id, record, token) {
 
 function excluirPoint(id, token) {
   if (SHEETS_API_URL) {
-    return fetch(SHEETS_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'excluirRTI', token: token, id: id })
-    }).then(function (r) { return r.json(); }).then(function (res) {
+    return postApi({ action: 'excluirRTI', token: token, id: id }).then(function (res) {
       if (!res.ok) return Promise.reject(new Error(res.error || 'Falha ao excluir.'));
       return res;
     });
@@ -454,11 +479,7 @@ function excluirPoint(id, token) {
 
 function listarRTIsRemoto(token) {
   if (SHEETS_API_URL) {
-    return fetch(SHEETS_API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'listarRTIs', token: token })
-    }).then(function (r) { return r.json(); });
+    return postApi({ action: 'listarRTIs', token: token });
   }
   return Promise.resolve({ ok: true, points: getLocalPoints() });
 }

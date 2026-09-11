@@ -92,6 +92,23 @@ function jsonResponse_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// Serializa as escritas na aba de OCI. A posição de linha devolvida por
+// encontrarLinhaRTIPorId_ é FÍSICA: entre localizar a linha e gravar/apagar
+// nela, uma execução concorrente que insira ou remova uma linha ANTES dela
+// desloca tudo o que vem depois -- e a gravação cai no registro errado, sem
+// erro nenhum. É a mesma família do caso SHOPPING SERRA TALHADA corrigido no
+// Termo em 25/08/2026. Os handlers de Auth.gs já usavam este padrão; os de RTI
+// não usavam nenhum.
+function comTravaRTI_(fn) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // O mapa é público: qualquer pessoa pode consultar os pontos de RTI, sem login.
 // "cadastrado_por" não entra na resposta pública — é um dado interno (ver LOG
 // e handleListarRTIs_, que exige sessão). "id" é incluído: é só um
@@ -124,6 +141,25 @@ function doPost(e) {
     return jsonResponse_({ ok: false, error: 'JSON inválido.' });
   }
 
+  // O switch PRECISA estar dentro de try/catch. Sem isso, qualquer exceção que
+  // escape de um handler faz o Apps Script responder com a PÁGINA DE ERRO HTML
+  // dele em vez de JSON, e o front-end quebra com
+  // "Unexpected token '<', "<!DOCTYPE "... is not valid JSON" -- sem pista do
+  // que houve. Pior: quando a exceção acontece DEPOIS da escrita na planilha, a
+  // operação deu certo e mesmo assim o usuário vê erro e a tela não atualiza.
+  // Foi o que ocorreu na exclusão do OCI CONDOMINIO BUONA VITA.
+  try {
+    return despachar_(body);
+  } catch (err) {
+    var msg = (err && err.message) ? err.message : String(err);
+    try {
+      registrarLog_('', '', 'erro_backend', 'ação "' + (body.action || '?') + '": ' + msg);
+    } catch (e) { /* nunca deixar a falha de LOG mascarar o erro original */ }
+    return jsonResponse_({ ok: false, error: 'Erro interno no servidor: ' + msg });
+  }
+}
+
+function despachar_(body) {
   switch (body.action) {
     case 'login': return jsonResponse_(handleLogin_(body));
     case 'logout': return jsonResponse_(handleLogout_(body));
@@ -224,6 +260,13 @@ function handleCadastrarRTI_(body) {
   var d = validarDadosRTI_(body);
   if (d.erro) return { ok: false, error: d.erro };
 
+  // Mesma trava da edição e da exclusão. appendRow não depende de índice de
+  // linha, mas serializar as escritas evita que uma inclusão se intercale com
+  // um deleteRow em curso.
+  return comTravaRTI_(function () { return gravarCadastroRTI_(body, d, sessao); });
+}
+
+function gravarCadastroRTI_(body, d, sessao) {
   var id = Utilities.getUuid();
   var timestamp = body.timestamp || new Date().toISOString();
   var sheet = rtiSheet_();
@@ -322,11 +365,19 @@ function handleEditarRTI_(body) {
   var id = String(body.id || '').trim();
   if (!id) return { ok: false, error: 'RTI não identificado.' };
 
-  var achado = encontrarLinhaRTIPorId_(id);
-  if (!achado) return { ok: false, error: 'RTI não encontrado.' };
-
   var d = validarDadosRTI_(body);
   if (d.erro) return { ok: false, error: d.erro };
+
+  // Localizar a linha e gravar nela têm de acontecer sob a MESMA trava:
+  // achado.linha é uma posição física, e a remoção concorrente de qualquer
+  // linha anterior a ela desloca o alvo -- fazendo a gravação cair no registro
+  // errado, em silêncio.
+  return comTravaRTI_(function () { return gravarEdicaoRTI_(id, d, sessao); });
+}
+
+function gravarEdicaoRTI_(id, d, sessao) {
+  var achado = encontrarLinhaRTIPorId_(id);
+  if (!achado) return { ok: false, error: 'RTI não encontrado.' };
 
   var novaLinha = achado.headers.map(function (h) {
     switch (h) {
@@ -362,9 +413,13 @@ function handleEditarRTI_(body) {
 }
 
 // Exclusão definitiva, mesma restrição de perfil da edição (admin_master/
-// admin — o vistoriador só cadastra). Fica registrada no LOG antes de apagar
-// a linha, guardando nome/endereço para o rastro não desaparecer junto com
-// a linha excluída.
+// admin — o vistoriador só cadastra). O nome/endereço são copiados ANTES de
+// apagar, para o rastro no LOG não desaparecer junto com a linha.
+//
+// Idempotente de propósito: excluir algo que já não existe é SUCESSO, não erro.
+// A regra antiga devolvia "RTI não encontrado", e isso confundia justamente no
+// caso em que mais atrapalha — o usuário cuja primeira tentativa funcionou mas
+// teve a resposta perdida, e que tenta de novo achando ter falhado.
 function handleExcluirRTI_(body) {
   var sessao = exigirSessao_(body.token, RTI_PERFIS_EDICAO);
   if (sessao.erro) return { ok: false, error: sessao.erro };
@@ -372,12 +427,19 @@ function handleExcluirRTI_(body) {
   var id = String(body.id || '').trim();
   if (!id) return { ok: false, error: 'RTI não identificado.' };
 
-  var achado = encontrarLinhaRTIPorId_(id);
-  if (!achado) return { ok: false, error: 'RTI não encontrado.' };
+  return comTravaRTI_(function () {
+    var achado = encontrarLinhaRTIPorId_(id);
+    if (!achado) return { ok: true, jaExcluido: true };
 
-  registrarLog_(sessao.login, sessao.perfil, 'exclusao_rti',
-    'excluiu "' + achado.valores.nome + '" (id ' + id + ', cadastrado por ' + achado.valores.cadastrado_por + ')');
-  rtiSheet_().deleteRow(achado.linha);
+    var nome = achado.valores.nome;
+    var cadastradoPor = achado.valores.cadastrado_por;
 
-  return { ok: true };
+    // Apaga PRIMEIRO, registra depois. Na ordem anterior, uma falha no
+    // deleteRow deixava no LOG uma exclusão que nunca aconteceu.
+    rtiSheet_().deleteRow(achado.linha);
+    registrarLog_(sessao.login, sessao.perfil, 'exclusao_rti',
+      'excluiu "' + nome + '" (id ' + id + ', cadastrado por ' + cadastradoPor + ')');
+
+    return { ok: true };
+  });
 }

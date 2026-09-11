@@ -288,12 +288,34 @@
     if (!session || !podeEditar(session)) return;
     if (!window.confirm('Excluir "' + nome + '"? Essa ação não pode ser desfeita.')) return;
 
-    excluirPoint(id, session.token).then(function () {
+    excluirPoint(id, session.token).then(function (res) {
       todosOsPontos = todosOsPontos.filter(function (p) { return p.id !== id; });
       renderizar();
+      if (res && res.jaExcluido) {
+        window.alert('"' + nome + '" já havia sido excluído. A lista foi atualizada.');
+      }
     }).catch(function (err) {
+      // A exclusão pode ter sido concluída no servidor mesmo com a resposta
+      // se perdendo no caminho (ver lerRespostaJson em app.js). Deixar a tela
+      // como está faz a lista mentir: foi o que aconteceu com o OCI CONDOMINIO
+      // BUONA VITA, que continuou listado depois de já ter sido apagado.
+      // Recarregar do servidor é a única forma de mostrar o estado real.
       window.alert((err && err.message) || 'Não foi possível excluir agora.');
+      recarregarDoServidor();
     });
+  }
+
+  // Refaz a consulta e redesenha, sem repetir geolocalização nem mexer na
+  // visibilidade dos blocos — serve para reconciliar a tela depois de uma
+  // operação cujo resultado ficou incerto.
+  function recarregarDoServidor() {
+    var session = getSession();
+    if (!session) return;
+    listarRTIsRemoto(session.token).then(function (res) {
+      if (!res || !res.ok) return;
+      todosOsPontos = (res.points || []).map(normalizePoint);
+      renderizar();
+    }).catch(function () { /* a mensagem do erro original já foi exibida */ });
   }
 
   // Exporta TODOS os pontos cadastrados (não só os filtrados/visíveis na

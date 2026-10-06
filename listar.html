@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Listar OCI — CAT Sertão</title>
+<title>Listar ocupações — MOCI — CAT Sertão</title>
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#14204A">
 <link rel="icon" type="image/png" href="CAT-SERTAO-SEM-FUNDO.png">
@@ -19,8 +19,8 @@
     <div class="top-logo"><img src="CAT-SERTAO-SEM-FUNDO.png" alt="Brasão do CAT Sertão"></div>
     <div style="min-width:0;">
       <div class="top-org">CAT Sertão · CBMPE</div>
-      <h1 class="top-title">Listar OCI</h1>
-      <div class="top-sub">Ocupações de Combate a Incêndio</div>
+      <h1 class="top-title">Listar ocupações</h1>
+      <div class="top-sub">Mapa de Ocupações Contra Incêndio (MOCI)</div>
     </div>
   </div>
 </header>
@@ -224,7 +224,7 @@
     if (pontos.length === 0) {
       hide(elTabela);
       hide(elBtnMais);
-      elResumo.textContent = 'Nenhum OCI encontrado para esse filtro.';
+      elResumo.textContent = 'Nenhuma ocupação encontrada para esse filtro.';
       return;
     }
 
@@ -232,7 +232,7 @@
     var visiveis = pontos.slice(0, limiteAtual);
     var omeProxima = omeMaisProxima(userLoc);
 
-    var totalTxt = pontos.length === 1 ? '1 OCI encontrado' : pontos.length + ' OCI encontrados';
+    var totalTxt = pontos.length === 1 ? '1 ocupação encontrada' : pontos.length + ' ocupações encontradas';
     var distTxt = userLoc ? ', ordenados do mais próximo ao mais distante da sua localização' : ', ordenados por nome (localização indisponível)';
     elResumo.textContent = 'Mostrando ' + visiveis.length + ' de ' + totalTxt + distTxt + '.';
 
@@ -359,9 +359,9 @@
 
     var ws = XLSX.utils.json_to_sheet(linhas);
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'OCI');
+    XLSX.utils.book_append_sheet(wb, ws, 'MOCI');
     var dataHoje = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(wb, 'oci-cat-sertao-' + dataHoje + '.xlsx');
+    XLSX.writeFile(wb, 'moci-cat-sertao-' + dataHoje + '.xlsx');
   }
 
   function renderizar() {
@@ -405,7 +405,7 @@
   function iniciar() {
     var session = getSession();
     if (!session) {
-      mostrarNegado('Você precisa estar logado para ver a listagem de OCI. Faça login no mapa e abra "Listar OCI" novamente.');
+      mostrarNegado('Você precisa estar logado para ver a listagem de ocupações. Faça login no mapa e abra "Listar ocupações" novamente.');
       return;
     }
     if (!podeVisualizarLista(session)) {

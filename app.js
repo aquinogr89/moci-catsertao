@@ -221,7 +221,7 @@ function buildPopupHtml(point, session) {
   }
 
   const btnEditar = (podeEditar(session) && point.id)
-    ? '<button type="button" class="btn-outline-navy btn-popup-editar" data-id="' + escapeHtml(point.id) + '" style="margin-top:10px;width:100%;">✏️ Editar OCI</button>'
+    ? '<button type="button" class="btn-outline-navy btn-popup-editar" data-id="' + escapeHtml(point.id) + '" style="margin-top:10px;width:100%;">✏️ Editar ocupação</button>'
     : '';
 
   return (
@@ -369,7 +369,7 @@ function saveLocalPoint(point) {
 function updateLocalPoint(id, novosDados) {
   const points = getLocalPoints();
   const idx = points.findIndex(function (p) { return p.id === id; });
-  if (idx === -1) return Promise.reject(new Error('OCI não encontrado.'));
+  if (idx === -1) return Promise.reject(new Error('Ocupação não encontrada.'));
   points[idx] = Object.assign({}, points[idx], novosDados, { id: id });
   setLocalPoints(points);
   return Promise.resolve(points[idx]);
@@ -378,7 +378,7 @@ function updateLocalPoint(id, novosDados) {
 function deleteLocalPoint(id) {
   const points = getLocalPoints();
   const idx = points.findIndex(function (p) { return p.id === id; });
-  if (idx === -1) return Promise.reject(new Error('OCI não encontrado.'));
+  if (idx === -1) return Promise.reject(new Error('Ocupação não encontrada.'));
   points.splice(idx, 1);
   setLocalPoints(points);
   return Promise.resolve({ ok: true });
@@ -526,11 +526,11 @@ function abrirEdicaoViaQueryParam() {
       return;
     }
     if (!podeEditar(session)) {
-      window.alert('Sua conta não tem permissão para editar OCI.');
+      window.alert('Sua conta não tem permissão para editar ocupações.');
       return;
     }
     abrirModalEdicaoPorId(id).catch(function (err) {
-      window.alert((err && err.message) || 'Não foi possível abrir a edição deste OCI agora.');
+      window.alert((err && err.message) || 'Não foi possível abrir a edição desta ocupação agora.');
     });
   }
   tentar();
@@ -708,7 +708,7 @@ function wireCadastroModal() {
     hide(campoDataAvcb); // form.reset() não dispara 'change', então esconde manualmente
 
     editingId = pointToEdit ? pointToEdit.id : null;
-    modalTitulo.textContent = editingId ? 'Editar OCI' : 'Cadastrar OCI';
+    modalTitulo.textContent = editingId ? 'Editar ocupação' : 'Cadastrar ocupação';
     btnSalvar.textContent = editingId ? 'Salvar edição' : 'Salvar cadastro';
 
     show(overlay);
@@ -791,7 +791,7 @@ function wireCadastroModal() {
     }
     if (!currentCapture || typeof currentCapture.lat !== 'number') {
       formError.textContent = locMode === 'manual'
-        ? 'Toque no mapa para marcar a localização do OCI.'
+        ? 'Toque no mapa para marcar a localização da ocupação.'
         : 'Não foi possível obter sua localização. Toque em "Atualizar localização" e tente novamente.';
       show(formError);
       return;
@@ -903,7 +903,7 @@ function abrirModalEdicaoPorId(id) {
   return listarRTIsRemoto(session.token).then(function (res) {
     if (!res.ok) throw new Error(res.error || 'Não foi possível carregar os dados agora.');
     const ponto = (res.points || []).map(normalizePoint).find(function (p) { return p.id === id; });
-    if (!ponto) throw new Error('OCI não encontrado — pode ter sido removido.');
+    if (!ponto) throw new Error('Ocupação não encontrada — pode ter sido removida.');
     if (window.abrirModalEdicaoComPonto) window.abrirModalEdicaoComPonto(ponto);
   });
 }
